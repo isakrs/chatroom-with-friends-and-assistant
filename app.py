@@ -11,23 +11,27 @@ import threading
 BROKER = "test.mosquitto.org"
 PORT = 1883
 TOPIC = "hackaton-test"
+CLIENT_ID = f'streamlit_client_{os.getpid()}'
 
 # Function to initialize MQTT client and start the loop
 def init_mqtt(q):
-    client = mqtt.Client()
+    # Initialize MQTT client with unique client ID and MQTTv5 protocol
+    client = mqtt.Client(client_id=CLIENT_ID, protocol=mqtt.MQTTv5)
 
     # Callback function for when the client connects to the broker
-    def on_connect(client, userdata, flags, rc):
-        if rc == 0:
+    def on_connect(client, userdata, flags, reasonCode, properties=None):
+        if reasonCode == 0:
             print("Connected to MQTT broker successfully!")
             client.subscribe(TOPIC)
+            print(f"Subscribed to topic '{TOPIC}'")
         else:
-            print(f"Connection failed with code {rc}")
+            print(f"Connection failed with reason code {reasonCode}")
 
     # Callback function for when a message is received
     def on_message(client, userdata, msg):
         try:
             message = msg.payload.decode()
+            print(f"Received message: {message}")
             message_dict = json.loads(message)
             q.put(message_dict)
         except Exception as e:
@@ -37,8 +41,12 @@ def init_mqtt(q):
     client.on_connect = on_connect
     client.on_message = on_message
 
-    # Connect to the broker and start the loop
-    client.connect(BROKER, PORT, 60)
+    # Connect to the broker with MQTTv5 properties
+    connect_properties = mqtt.Properties(mqtt.PacketTypes.CONNECT)
+    # Example: Set session expiry interval to 1 hour (3600 seconds)
+    connect_properties.SessionExpiryInterval = 3600
+
+    client.connect(BROKER, PORT, keepalive=60, properties=connect_properties)
     client.loop_start()
     return client
 
@@ -58,8 +66,10 @@ def call_api(data):
     }
     try:
         response = requests.post(GPT_API_URL, headers=headers, json=data)
+        print(f"GPT API response status: {response.status_code}")
         return response
     except requests.exceptions.ConnectionError as e:
+        print(f"Connection error: {e}")
         return None
 
 def ask_gpt(question, messages):
@@ -92,32 +102,50 @@ def ask_gpt(question, messages):
     data["messages"].append(new_message)
 
     # Publish user message to the MQTT topic
-    print(f"Publishing message: '{new_message}' to topic '{TOPIC}'")
-    encoded_message = json.dumps(new_message)
-    mqtt_client.publish(TOPIC, encoded_message)
+    print(f"Publishing user message: '{new_message}' to topic '{TOPIC}'")
+    try:
+        encoded_message = json.dumps(new_message)
+        mqtt_client.publish(TOPIC, encoded_message)
+    except Exception as e:
+        print(f"Failed to publish user message: {e}")
+        return False, None
 
-    print(f"Data: {data}")
+    print(f"Data sent to GPT API: {data}")
     response = call_api(data)
 
     # Error handling, no response if response is None or status is not 200
     if response is None or response.status_code != 200:
+        print("GPT API call failed.")
         return False, response
 
     response_body = response.json()
+    print(f"GPT API response: {response_body}")
 
-    # Append assistant answer to data
-    assistant_message = {
-        "role": "assistant",
-        "content": response_body["choices"][0]["message"]["content"]
-    }
+    # Extract assistant's message
+    try:
+        assistant_content = response_body["choices"][0]["message"]["content"]
+        assistant_message = {
+            "role": "assistant",
+            "content": assistant_content
+        }
+    except (KeyError, IndexError) as e:
+        print(f"Error extracting assistant message: {e}")
+        return False, response
 
     # Publish the GPT response to the MQTT topic
-    encoded_message = json.dumps(assistant_message)
-    mqtt_client.publish(TOPIC, encoded_message)
+    print(f"Publishing assistant message: '{assistant_message}' to topic '{TOPIC}'")
+    try:
+        encoded_message = json.dumps(assistant_message)
+        mqtt_client.publish(TOPIC, encoded_message)
+    except Exception as e:
+        print(f"Failed to publish assistant message: {e}")
+        return False, response
 
     return True, response
 
 ### Streamlit UI ###
+st.set_page_config(page_title="Chat with Global Production Planning Manager", layout="wide")
+
 st.title("Chat with Global Production Planning Manager")
 
 # Initialize session state for messages and queue
@@ -137,25 +165,23 @@ q = st.session_state["queue"]
 def process_queue():
     while not q.empty():
         message = q.get()
-        st.session_state["messages"].append(message)
+        print(f"Processing message from queue: {message}")
+        # Avoid duplicating user messages since they are already appended
+        if message not in st.session_state["messages"]:
+            st.session_state["messages"].append(message)
+            print(f"Appended message to session_state: {message}")
 
-        # Optionally, you can add more logic here to handle different message types
-        if message["role"] == "user":
-            st.write(f"**User**: {message['content']}")
-        elif message["role"] == "assistant":
-            st.write(f"**Yara**: {message['content']}")
-
-# Textbox for user input
-user_input = st.text_input("Ask a question:")
+# Text input within a form to handle submission and reset input box
+with st.form(key='input_form', clear_on_submit=True):
+    user_input = st.text_input("Ask a question:", key='input_box')
+    submit_button = st.form_submit_button(label='Send')
 
 # Handle user input
-if st.button("Send"):
-    if user_input:
-        print(f"User input: '{user_input}'")
-        print(f"Current messages: {st.session_state['messages']}")
-        is_success, response = ask_gpt(user_input, st.session_state["messages"])
-        if not is_success:
-            st.error("Failed to get response from GPT API.")
+if submit_button and user_input:
+    print(f"User input submitted: '{user_input}'")
+    is_success, response = ask_gpt(user_input, st.session_state["messages"])
+    if not is_success:
+        st.error("Failed to get response from GPT API.")
 
 # Clear chat messages
 if st.button("Clear Chat"):
@@ -164,3 +190,11 @@ if st.button("Clear Chat"):
 
 # Process any messages in the queue
 process_queue()
+
+# Display all messages
+print(f"Displaying messages: {st.session_state['messages']}")
+for message in st.session_state["messages"]:
+    if message["role"] == "user":
+        st.markdown(f"**User**: {message['content']}")
+    elif message["role"] == "assistant":
+        st.markdown(f"**Yara**: {message['content']}")
