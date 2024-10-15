@@ -12,23 +12,7 @@ topic = "hackaton-test"
 # Create a new MQTT client instance
 client = mqtt.Client()
 
-# Callback function for when the client connects to the broker
-def on_connect(client, userdata, flags, rc):
-    if rc == 0:
-        print("Connected to MQTT broker successfully!")
-        client.subscribe(topic)
-    else:
-        print(f"Connection failed with code {rc}")
-
-# Callback function for when a message is received
-def on_message(client, userdata, msg):
-    print(f"Received message: '{msg.payload.decode()}' on topic '{msg.topic}'")
-
-# Attach the callbacks
-client.on_connect = on_connect
-client.on_message = on_message
-
-# Connect to the broker and start the loop
+# Connect to the broker
 client.connect(broker, port, 60)
 client.loop_start()
 
@@ -92,9 +76,10 @@ def ask_gpt(question, data={}):
     data["messages"].append(new_message)
     answer = new_message["content"]
 
-    # Publish the GPT response to the MQTT topic
-    client.publish(topic, answer)
-    print(f"Published to MQTT topic '{topic}': {answer}")
+    # Publish the user question and GPT response to the MQTT topic
+    client.publish(topic, f"User: {question}")
+    client.publish(topic, f"Yara: {answer}")
+    print(f"Published to MQTT topic '{topic}': User: {question} and Yara: {answer}")
 
     return True, answer, data, response
 
@@ -116,6 +101,7 @@ if st.button("Send"):
         if is_success:
             st.session_state["history"] = data
 
+            # Display conversation in Streamlit
             for message in reversed(data["messages"]):
                 if message["role"] == "user":
                     st.write(f"**You**: {message['content']}")
@@ -128,6 +114,3 @@ if st.button("Send"):
 if st.button("Clear Chat"):
     st.session_state["history"] = {}
     st.rerun()
-
-# Stop the loop and disconnect MQTT client when app stops
-st.write("App running. Press 'Stop' to exit and disconnect from MQTT broker.")
