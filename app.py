@@ -2,18 +2,7 @@ import streamlit as st
 import requests
 from dotenv import load_dotenv
 import os
-import paho.mqtt.client as mqtt
 
-### Mosquitto Code ###
-# MQTT broker details
-broker = "test.mosquitto.org"
-port = 1883
-topic = "hackaton-test"
-
-# client = mqtt.Client()
-
-
-### GPT API Code ###
 # Load environment variables
 load_dotenv()
 
@@ -47,9 +36,7 @@ def ask_gpt(question, data={}):
         "and users will look to you for inspiration on how to digitize and modernize Yara’s operations."
     )
 
-    print(data)
-
-    if len(data) == 0:
+    if not data:
         data = {
             "messages": [
                 {
@@ -98,24 +85,28 @@ user_input = st.text_input("Ask a question:")
 
 # History of all API interactions
 if "history" not in st.session_state:
-    st.session_state["history"] = {}
+    st.session_state["history"] = []
 
 # Handle user input
 if st.button("Send"):
     if user_input:
-        is_success, answer, data, response  = ask_gpt(user_input, data=st.session_state["history"])
+        is_success, answer, data, response  = ask_gpt(user_input)
         if is_success:
-            st.session_state["history"] = data
-            for message in data["messages"]:
+            # Append to chat history
+            st.session_state["history"].append(data["messages"][-2]) # User input
+            st.session_state["history"].append(data["messages"][-1]) # Assistant answer
+            
+            # Display chat history
+            for message in reversed(st.session_state["history"]):
                 if message["role"] == "user":
                     st.write(f"**You**: {message['content']}")
                 elif message["role"] == "assistant":
-                    st.write(f"**Yara**: {answer}")
+                    st.write(f"**Yara**: {message['content']}")
         else:
             st.write("**Yara**: Sorry, I couldn't process your request. Please try again.")
             st.write("Response:", response)
 
 # Clear chat history
 if st.button("Clear Chat"):
-    st.session_state["history"] = {}
+    st.session_state["history"] = []
     st.rerun()
