@@ -60,6 +60,10 @@ def ask_gpt(question, data={}):
         new_message = {"role": "user", "content": question}
         data["messages"].append(new_message)
 
+    # Publish the user question to the MQTT topic before calling the GPT API
+    client.publish(topic, f"User: {question}")
+    print(f"Published to MQTT topic '{topic}': User: {question}")
+
     response = call_api(data)
 
     # Error handling, no response if response is None or status is not 200
@@ -76,10 +80,9 @@ def ask_gpt(question, data={}):
     data["messages"].append(new_message)
     answer = new_message["content"]
 
-    # Publish the user question and GPT response to the MQTT topic
-    client.publish(topic, f"User: {question}")
+    # Publish the GPT response to the MQTT topic after receiving the answer
     client.publish(topic, f"Yara: {answer}")
-    print(f"Published to MQTT topic '{topic}': User: {question} and Yara: {answer}")
+    print(f"Published to MQTT topic '{topic}': Yara: {answer}")
 
     return True, answer, data, response
 
