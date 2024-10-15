@@ -65,7 +65,6 @@ def ask_gpt(question, data={}):
         "and users will look to you for inspiration on how to digitize and modernize Yara’s operations."
     )
 
-    print(data)
     if len(data) == 0:
         data = {
             "messages": [
@@ -117,7 +116,7 @@ if st.button("Send"):
         if is_success:
             st.session_state["history"] = data
 
-            for message in data["messages"]:
+            for message in reversed(data["messages"]):
                 if message["role"] == "user":
                     st.write(f"**You**: {message['content']}")
                 elif message["role"] == "assistant":
