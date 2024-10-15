@@ -1,8 +1,9 @@
-import streamlit as st
-import requests
 from dotenv import load_dotenv
+import json
 import os
 import paho.mqtt.client as mqtt
+import requests
+import streamlit as st
 
 ### MQTT Configuration ###
 broker = "test.mosquitto.org"
@@ -23,6 +24,25 @@ def on_connect(client, userdata, flags, rc):
 # Callback function for when a message is received
 def on_message(client, userdata, msg):
     print(f"Received message: '{msg.payload.decode()}' on topic '{msg.topic}'")
+    message = msg.payload.decode()
+    print(f"Message in on_message: {message}")
+    print("type of message: ", type(message))
+
+    message_dict = json.loads(message)
+    print(f"Message in on_message after json.loads: {message_dict}")
+    print("type of message: ", type(message_dict))
+    
+    # Save the message history
+    if "messages" not in st.session_state:
+        st.session_state["messages"] = []
+    st.session_state["messages"].append(message_dict)
+
+    # Display the message in the Streamlit app
+    if message_dict["role"] == "user":
+        st.write(f"**User**: {message_dict['content']}")
+    elif message_dict["role"] == "assistant":
+        st.write(f"**Yara**: {message_dict['content']}")
+
 
 # Attach the callbacks
 client.on_connect = on_connect
@@ -52,7 +72,11 @@ def call_api(data):
     except requests.exceptions.ConnectionError as e:
         return None
 
-def ask_gpt(question, data={}):
+
+def ask_gpt(question, messages):
+    print(f"Sending question: '{question}' to GPT API")
+    print(f"Current messages: {messages}")
+
     system_instructions = (
         "You are an expert at Yara International ASA, specializing in production management. "
         "Acting as the global planning hub, you oversee and control all aspects of production. "
@@ -65,22 +89,31 @@ def ask_gpt(question, data={}):
         "and users will look to you for inspiration on how to digitize and modernize Yara’s operations."
     )
 
-    if len(data) == 0:
-        data = {
-            "messages": [
-                {"role": "system", "content": system_instructions},
-                {"role": "user", "content": f"{question}"}
-            ]
-        }
-    else:
-        new_message = {"role": "user", "content": question}
-        data["messages"].append(new_message)
+    data = {
+        "messages": [
+            {
+                "role": "system",
+                "content": system_instructions
+            }
+        ]
+    }
+    data["messages"].append(messages)
 
+    new_message = {"role": "user", "content": question}
+    data["messages"].append(new_message)
+
+    # Publish user message to the MQTT topic
+    print(f"Publishing message: '{new_message}' to topic '{topic}'")
+    encoded_message = json.dumps(new_message)
+    client.publish(topic, encoded_message)
+    
+
+    print(f"Data: {data}")
     response = call_api(data)
 
     # Error handling, no response if response is None or status is not 200
     if response is None or response.status_code != 200:
-        return False, "", data, response
+        return False, response
 
     response_body = response.json()
 
@@ -89,14 +122,12 @@ def ask_gpt(question, data={}):
         "role": "assistant",
         "content": response_body["choices"][0]["message"]["content"]
     }
-    data["messages"].append(new_message)
-    answer = new_message["content"]
 
     # Publish the GPT response to the MQTT topic
-    client.publish(topic, answer)
-    print(f"Published to MQTT topic '{topic}': {answer}")
+    encoded_message = json.dumps(new_message)
+    client.publish(topic, encoded_message)
 
-    return True, answer, data, response
+    return True, response
 
 ### Streamlit UI ###
 st.title(f"Chat with Global Production Planning Manager")
@@ -105,29 +136,17 @@ st.title(f"Chat with Global Production Planning Manager")
 user_input = st.text_input("Ask a question:")
 
 # History of all API interactions
-if "history" not in st.session_state:
-    st.session_state["history"] = {}
+if "messages" not in st.session_state:
+    st.session_state["messages"] = []
 
 # Handle user input
 if st.button("Send"):
     if user_input:
-        is_success, answer, data, response = ask_gpt(user_input, data=st.session_state["history"])
+        print(f"User input: '{user_input}'")
+        print(f"Current messages: {st.session_state['messages']}")
+        is_success, response = ask_gpt(user_input, st.session_state["messages"])
 
-        if is_success:
-            st.session_state["history"] = data
-
-            for message in reversed(data["messages"]):
-                if message["role"] == "user":
-                    st.write(f"**You**: {message['content']}")
-                elif message["role"] == "assistant":
-                    st.write(f"**Yara**: {message['content']}")
-        else:
-            st.write("**Yara**: Sorry, I couldn't process your request. Please try again.")
-
-# Clear chat history
+# Clear chat messages
 if st.button("Clear Chat"):
-    st.session_state["history"] = {}
+    st.session_state["messages"] = []
     st.rerun()
-
-# Stop the loop and disconnect MQTT client when app stops
-st.write("App running. Press 'Stop' to exit and disconnect from MQTT broker.")
